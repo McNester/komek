@@ -1,6 +1,6 @@
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
 
-llm_model = "llama2"
+llm_model = "llama3.2"
 
 
 def query_ollama(prompt):
