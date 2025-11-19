@@ -1,0 +1,46 @@
+services:
+
+  chroma:
+      image: chroma_server
+      build: 
+        context: .
+        dockerfile: ./chroma/dockerfile-db
+      networks:
+        - net
+      healthcheck: 
+        test: curl localhost:8000/api/v1/heartbeat || exit 1
+        interval: 10s
+        retries: 2
+        start_period: 3s
+        timeout: 3s
+
+  chroma_client:
+    build:
+      context: .
+      dockerfile: ./chroma/dockerfile
+    networks:
+      - net
+    depends_on:
+      chroma:
+        condition: service_healthy
+  chat:
+    build:
+      context: .
+      dockerfile: ./chat/dockerfile
+    ports:
+      - 8501:8501
+    networks:
+      - net
+    depends_on:
+      - chroma_client
+
+volumes:
+  index_data:
+    driver: local
+networks:
+  net:
+    driver: bridge
+  external_net:
+    external: true
+    name: rag_network
+
