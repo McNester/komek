@@ -7,4 +7,5 @@ COPY requirements.txt ./
 COPY mental_health_docs.json ./
 RUN pip install -r requirements.txt
 COPY . /app/
+COPY common/ ./common/
 CMD ["python","-u","chroma/chroma.py"]

@@ -6,5 +6,6 @@ ENV PYTHONPATH="${PYTHONPATH}:/app"
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 COPY . /app/
+COPY common/ ./common/
 CMD ["streamlit", "run", "chat/chat.py", "--server.port=8501", "--server.address=0.0.0.0"]
 

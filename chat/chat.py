@@ -10,20 +10,31 @@ from chroma.chroma import (
     get_all_chat_sessions,
     update_chat_name,
     delete_chat_session,
-    get_chat_name
+    create_user,
+    get_user_by_username,
+    username_exists
 )
 from ollama_client.llm import query_ollama
+from common.auth import (
+    hash_password,
+    verify_password,
+    validate_username,
+    validate_password
+)
 
 USER = "user"
 ASSISTANT = "ai"
 MESSAGES = "messages"
 CURRENT_CHAT_KEY = "chat_id"
 CURRENT_CHAT_NAME = "chat_name"
+CURRENT_USER = "current_user"
+USER_ID = "user_id"
+IS_AUTHENTICATED = "is_authenticated"
 
-# Page config
-st.set_page_config(page_title="Mental Health Support", page_icon="🧠", layout="wide")
 
-# Custom CSS for better styling
+st.set_page_config(page_title="Mental Health Support", layout="wide")
+
+
 st.markdown("""
 <style>
     .chat-item {
@@ -54,7 +65,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def init_session_state():
-    """Initialize all required session state variables."""
+
+    if IS_AUTHENTICATED not in st.session_state:
+        st.session_state[IS_AUTHENTICATED] = False
+    if CURRENT_USER not in st.session_state:
+        st.session_state[CURRENT_USER] = None
+    if USER_ID not in st.session_state:
+        st.session_state[USER_ID] = None
     if CURRENT_CHAT_KEY not in st.session_state:
         st.session_state[CURRENT_CHAT_KEY] = None
     if CURRENT_CHAT_NAME not in st.session_state:
@@ -63,6 +80,142 @@ def init_session_state():
         st.session_state[MESSAGES] = []
     if "chat_list_refresh" not in st.session_state:
         st.session_state.chat_list_refresh = 0
+    if "auth_page" not in st.session_state:
+        st.session_state.auth_page = "login"
+
+def login_user(username, password):
+    """
+    Authenticate a user.
+    
+    Returns:
+        tuple: (success: bool, message: str)
+    """
+    user, password_hash = get_user_by_username(username)
+    
+    if user is None:
+        return False, "Username not found"
+    
+    if not verify_password(password, password_hash):
+        return False, "Incorrect password"
+    
+    
+    st.session_state[IS_AUTHENTICATED] = True
+    st.session_state[CURRENT_USER] = username
+    st.session_state[USER_ID] = user.user_id
+    
+    return True, "Login successful"
+
+def register_user(username, password, email=None):
+    """
+    Register a new user.
+    
+    Returns:
+        tuple: (success: bool, message: str)
+    """
+    
+    is_valid, error_msg = validate_username(username)
+    if not is_valid:
+        return False, error_msg
+    
+    
+    is_valid, error_msg = validate_password(password)
+    if not is_valid:
+        return False, error_msg
+    
+    
+    if username_exists(username):
+        return False, "Username already exists"
+    
+    
+    password_hash = hash_password(password)
+    user = create_user(username, password_hash, email)
+    
+    
+    st.session_state[IS_AUTHENTICATED] = True
+    st.session_state[CURRENT_USER] = username
+    st.session_state[USER_ID] = user.user_id
+    
+    return True, "Registration successful"
+
+def logout_user():
+    """Log out the current user."""
+    st.session_state[IS_AUTHENTICATED] = False
+    st.session_state[CURRENT_USER] = None
+    st.session_state[USER_ID] = None
+    st.session_state[CURRENT_CHAT_KEY] = None
+    st.session_state[CURRENT_CHAT_NAME] = None
+    st.session_state[MESSAGES] = []
+    st.rerun()
+
+def show_login_page():
+    """Display the login page."""
+    st.title("Mental Health Support")
+    st.subheader("Login")
+    
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login", use_container_width=True)
+        
+        if submit:
+            if not username or not password:
+                st.error("Please enter both username and password")
+            else:
+                success, message = login_user(username, password)
+                if success:
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
+    
+    st.divider()
+    
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.write("Don't have an account?")
+    with col2:
+        if st.button("Register"):
+            st.session_state.auth_page = "register"
+            st.rerun()
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+
+def show_register_page():
+    """Display the registration page."""
+    st.title("Mental Health Support")
+    st.subheader("Register")
+    
+    with st.form("register_form"):
+        username = st.text_input("Username", help="3-20 characters, letters, numbers, hyphens, and underscores only")
+        email = st.text_input("Email (optional)")
+        password = st.text_input("Password", type="password", help="Minimum 6 characters")
+        password_confirm = st.text_input("Confirm Password", type="password")
+        submit = st.form_submit_button("Register", use_container_width=True)
+        
+        if submit:
+            if not username or not password:
+                st.error("Username and password are required")
+            elif password != password_confirm:
+                st.error("Passwords do not match")
+            else:
+                success, message = register_user(username, password, email)
+                if success:
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
+    
+    st.divider()
+    
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.write("Already have an account?")
+    with col2:
+        if st.button("Login"):
+            st.session_state.auth_page = "login"
+            st.rerun()
+    
+    st.markdown("</div>", unsafe_allow_html=True)
 
 def generate_chat_name(first_message):
     """
@@ -78,15 +231,15 @@ Example: "Anxiety and Sleep Issues" or "Depression Support"
 Title:"""
         
         chat_name = query_ollama(prompt).strip()
-        # Remove quotes if present
+        
         chat_name = chat_name.strip('"').strip("'")
-        # Limit to 50 characters
+        
         if len(chat_name) > 50:
             chat_name = chat_name[:47] + "..."
         return chat_name
     except Exception as e:
         print(f"Error generating chat name: {e}")
-        # Fallback: use first few words of the message
+        
         words = first_message.split()[:4]
         return " ".join(words) + ("..." if len(first_message.split()) > 4 else "")
 
@@ -96,8 +249,8 @@ def create_new_chat():
     st.session_state[CURRENT_CHAT_KEY] = new_id
     st.session_state[CURRENT_CHAT_NAME] = "New Chat"
     st.session_state[MESSAGES] = []
-    # Store session with temporary name
-    store_chat_session(new_id, "New Chat")
+    
+    store_chat_session(new_id, st.session_state[USER_ID], "New Chat")
     st.session_state.chat_list_refresh += 1
     st.rerun()
 
@@ -106,57 +259,61 @@ def load_chat(chat_id, chat_name):
     if chat_id != st.session_state[CURRENT_CHAT_KEY]:
         st.session_state[CURRENT_CHAT_KEY] = chat_id
         st.session_state[CURRENT_CHAT_NAME] = chat_name
-        loaded_messages = load_chat_history(chat_id)
+        loaded_messages = load_chat_history(chat_id, st.session_state[USER_ID])
         st.session_state[MESSAGES] = loaded_messages if loaded_messages else []
         st.rerun()
 
 def delete_current_chat():
     """Delete the current chat and switch to a new one."""
     if st.session_state[CURRENT_CHAT_KEY]:
-        delete_chat_session(st.session_state[CURRENT_CHAT_KEY])
+        delete_chat_session(st.session_state[CURRENT_CHAT_KEY], st.session_state[USER_ID])
         st.session_state.chat_list_refresh += 1
         create_new_chat()
 
-# Initialize session state
+
 init_session_state()
 
-# Sidebar
+
+if not st.session_state[IS_AUTHENTICATED]:
+    if st.session_state.auth_page == "login":
+        show_login_page()
+    else:
+        show_register_page()
+    st.stop()
+
+
+
+
 with st.sidebar:
+    
+    st.markdown(f"### {st.session_state[CURRENT_USER]}")
+    if st.button("Logout", type="secondary", use_container_width=True):
+        logout_user()
+    
+    st.divider()
     st.title("Support Sessions")
     
-    # # Crisis resources
-    # with st.expander("Crisis Resources", expanded=False):
-    #     st.markdown("""
-    #     **If you're in crisis:**
-    #     
-    #     - National Suicide Prevention Lifeline: 988
-    #     - Crisis Text Line: Text HOME to 741741
-    #     - International: findahelpline.com
-    #     
-    #     This is an AI support tool, not a replacement for professional help.
-    #     """)
     
-    # New Chat button
     if st.button("+ New Session", type="primary", use_container_width=True):
         create_new_chat()
     
     st.divider()
     
-    # Get all chat sessions
-    chat_sessions = get_all_chat_sessions()
+    
+    chat_sessions = get_all_chat_sessions(st.session_state[USER_ID])
     
     if chat_sessions:
         st.subheader("Previous Sessions")
         
-        # Display each chat as a clickable item
+        
         for chat_id, chat_name, updated_at in chat_sessions:
-            # Check if this is the active chat
+            
             is_active = (chat_id == st.session_state[CURRENT_CHAT_KEY])
             
             col1, col2 = st.columns([4, 1])
             
             with col1:
-                # Make chat name clickable
+                
                 if st.button(
                     f"{'> ' if is_active else ''}{chat_name}",
                     key=f"chat_{chat_id}",
@@ -166,54 +323,54 @@ with st.sidebar:
                     load_chat(chat_id, chat_name)
             
             with col2:
-                # Delete button
-                if st.button("X", key=f"delete_{chat_id}", help="Delete this session"):
+                
+                if st.button("❌", key=f"delete_{chat_id}", help="Delete this session"):
                     if chat_id == st.session_state[CURRENT_CHAT_KEY]:
                         delete_current_chat()
                     else:
-                        delete_chat_session(chat_id)
+                        delete_chat_session(chat_id, st.session_state[USER_ID])
                         st.session_state.chat_list_refresh += 1
                         st.rerun()
     else:
         st.info("No previous sessions. Start a new conversation.")
 
-# Main chat interface
+
 st.title("Mental Health Support Assistant")
 
-# Display current chat name if exists
+
 if st.session_state[CURRENT_CHAT_NAME] and st.session_state[CURRENT_CHAT_NAME] != "New Chat":
     st.caption(f"Session: {st.session_state[CURRENT_CHAT_NAME]}")
 
 st.write("Share what's on your mind. I'm here to listen and provide supportive guidance.")
 
-# Create new chat if none exists
+
 if st.session_state[CURRENT_CHAT_KEY] is None:
     create_new_chat()
 
-# Display messages
+
 for msg in st.session_state[MESSAGES]:
     with st.chat_message(msg.actor):
         st.write(msg.payload)
 
-# Handle user input
+
 prompt = st.chat_input("How are you feeling today?")
 
 if prompt:
-    # Check if this is the first message in a new chat
+    
     is_first_message = (
         len(st.session_state[MESSAGES]) == 0 and 
         st.session_state[CURRENT_CHAT_NAME] == "New Chat"
     )
     
-    # Add user message
+    
     st.session_state[MESSAGES].append(Message(actor=USER, payload=prompt))
     with st.chat_message(USER):
         st.write(prompt)
     
-    # Store user message
-    store_chat_message(st.session_state[CURRENT_CHAT_KEY], USER, prompt)
     
-    # Generate chat name from first message
+    store_chat_message(st.session_state[CURRENT_CHAT_KEY], USER, prompt, st.session_state[USER_ID])
+    
+    
     if is_first_message:
         with st.spinner("Creating session..."):
             chat_name = generate_chat_name(prompt)
@@ -221,7 +378,7 @@ if prompt:
             update_chat_name(st.session_state[CURRENT_CHAT_KEY], chat_name)
             st.session_state.chat_list_refresh += 1
     
-    # Generate and add AI response
+    
     with st.spinner("Thinking..."):
         response = rag_pipeline(prompt)
     
@@ -229,9 +386,9 @@ if prompt:
     with st.chat_message(ASSISTANT):
         st.write(response)
     
-    # Store AI message
-    store_chat_message(st.session_state[CURRENT_CHAT_KEY], ASSISTANT, response)
     
-    # Rerun to update UI with new chat name
+    store_chat_message(st.session_state[CURRENT_CHAT_KEY], ASSISTANT, response, st.session_state[USER_ID])
+    
+    
     if is_first_message:
         st.rerun()

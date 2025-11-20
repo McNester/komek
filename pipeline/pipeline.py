@@ -18,10 +18,10 @@ def rag_pipeline(query_text):
         str: The generated supportive response from the LLM.
     """
     try:
-        # Retrieve relevant mental health Q&A documents (get top 3 for better context)
+        
         retrieved_docs, metadata = query_chromadb(query_text, n_results=3)
         
-        # Combine retrieved documents into context
+        
         if retrieved_docs and len(retrieved_docs[0]) > 0:
             context_parts = []
             for doc in retrieved_docs[0]:
@@ -30,7 +30,7 @@ def rag_pipeline(query_text):
         else:
             context = "No specific examples found, but I'm here to help."
 
-        # Create an empathetic, professional prompt
+        
         augmented_prompt = f"""You are a mental health diagnosis assistant. Based on the following examples of mental health Q&A, 
 provide a compassionate, helpful response to the user's concern. You must ask follow up questions to further deepen understanding of the users situation.
 

@@ -1,2 +1,1 @@
-# ReZanAI
 # komek

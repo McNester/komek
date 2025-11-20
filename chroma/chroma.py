@@ -5,7 +5,7 @@ import json
 import numpy as np
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
 from chromadb.config import Settings
-from common.models import Message
+from common.models import Message, User
 import os
 
 print("Starting chroma client")
@@ -39,7 +39,7 @@ embedding = ChromaDBEmbeddingFunction(
     )
 )
 
-# Changed collection name for mental health context
+
 collection_name = "mental_health_support_collection"
 collection = chroma_client.get_or_create_collection(
     name=collection_name,
@@ -69,15 +69,15 @@ def initialize_collection(force_reload=False):
     Args:
         force_reload (bool): If True, will reload documents even if collection is not empty.
     """
-    # Check if documents already exist in the collection
+    
     doc_count = collection.count()
     
-    # Skip loading if documents already exist and force_reload is False
+    
     if doc_count > 0 and not force_reload:
         print(f"Collection already contains {doc_count} documents. Skipping initialization.")
         return
     
-    # Load mental health document file
+    
     json_file = "mental_health_docs.json"
     if not os.path.exists(json_file):
         print(f"Document file {json_file} not found. Skipping initialization.")
@@ -97,7 +97,117 @@ def initialize_collection(force_reload=False):
     except Exception as e:
         print(f"Error loading documents: {e}")
 
-# Query functions (these don't load documents, only query the DB)
+
+
+def create_user(username: str, password_hash: str, email: str = None) -> User:
+    """
+    Create a new user in the database.
+    
+    Args:
+        username (str): Username
+        password_hash (str): Hashed password
+        email (str): User email (optional)
+    
+    Returns:
+        User: The created user object
+    """
+    user_id = str(uuid.uuid4())
+    created_at = datetime.utcnow().isoformat()
+    
+    metadata = {
+        "user_id": user_id,
+        "username": username,
+        "password_hash": password_hash,
+        "email": email or "",
+        "created_at": created_at,
+        "type": "user"
+    }
+    
+    collection.add(
+        documents=[f"User: {username}"],
+        metadatas=[metadata],
+        ids=[f"user_{user_id}"]
+    )
+    
+    print(f"Created user: {username} with ID: {user_id}")
+    return User(user_id=user_id, username=username, email=email, created_at=created_at)
+
+def get_user_by_username(username: str) -> tuple[User, str] | tuple[None, None]:
+    """
+    Retrieve a user by username.
+    
+    Args:
+        username (str): Username to search for
+    
+    Returns:
+        tuple: (User object, password_hash) or (None, None) if not found
+    """
+    try:
+        results = collection.get(
+            where={"$and": [{"username": username}, {"type": "user"}]}
+        )
+        
+        metadatas = results.get("metadatas", [])
+        if metadatas:
+            meta = metadatas[0]
+            user = User(
+                user_id=meta.get("user_id"),
+                username=meta.get("username"),
+                email=meta.get("email"),
+                created_at=meta.get("created_at")
+            )
+            return user, meta.get("password_hash")
+        
+        return None, None
+    except Exception as e:
+        print(f"Error getting user by username: {e}")
+        return None, None
+
+def get_user_by_id(user_id: str) -> User | None:
+    """
+    Retrieve a user by user_id.
+    
+    Args:
+        user_id (str): User ID to search for
+    
+    Returns:
+        User: User object or None if not found
+    """
+    try:
+        results = collection.get(
+            where={"$and": [{"user_id": user_id}, {"type": "user"}]}
+        )
+        
+        metadatas = results.get("metadatas", [])
+        if metadatas:
+            meta = metadatas[0]
+            return User(
+                user_id=meta.get("user_id"),
+                username=meta.get("username"),
+                email=meta.get("email"),
+                created_at=meta.get("created_at")
+            )
+        
+        return None
+    except Exception as e:
+        print(f"Error getting user by ID: {e}")
+        return None
+
+def username_exists(username: str) -> bool:
+    """
+    Check if a username already exists.
+    
+    Args:
+        username (str): Username to check
+    
+    Returns:
+        bool: True if username exists, False otherwise
+    """
+    user, _ = get_user_by_username(username)
+    return user is not None
+
+
+
 def query_chromadb(query_text, n_results=3):
     """
     Query the ChromaDB collection for relevant documents.
@@ -115,11 +225,12 @@ def query_chromadb(query_text, n_results=3):
     )
     return results["documents"], results["metadatas"]
 
-def store_chat_message(chat_id, role, content):
-    """Store a chat message."""
+def store_chat_message(chat_id, role, content, user_id):
+    """Store a chat message with user association."""
     msg_id = str(uuid.uuid4())
     metadata = {
         "chat_id": chat_id,
+        "user_id": user_id,
         "role": role,
         "timestamp": datetime.utcnow().isoformat(),
         "type": "chat"
@@ -130,10 +241,10 @@ def store_chat_message(chat_id, role, content):
         ids=[msg_id]
     )
 
-def load_chat_history(chat_id):
-    """Load chat history for a specific chat."""
+def load_chat_history(chat_id, user_id):
+    """Load chat history for a specific chat and user."""
     results = collection.get(
-        where={"chat_id": chat_id}
+        where={"$and": [{"chat_id": chat_id}, {"user_id": user_id}]}
     )
 
     metadatas = results.get("metadatas") or []
@@ -142,14 +253,14 @@ def load_chat_history(chat_id):
     if not metadatas or not documents:
         return []
 
-    # Filter only items where type == "chat" (i.e. actual chat messages)
+    
     chat_items = [
         (meta, doc)
         for meta, doc in zip(metadatas, documents)
         if meta.get("type") == "chat"
     ]
 
-    # Sort by timestamp
+    
     chat = sorted(
         chat_items,
         key=lambda x: x[0].get("timestamp") or datetime.min.isoformat()
@@ -157,12 +268,13 @@ def load_chat_history(chat_id):
 
     return [Message(actor=("user" if meta["role"] == "user" else "ai"), payload=doc) for meta, doc in chat]
 
-def store_chat_session(chat_id, chat_name="New Chat"):
+def store_chat_session(chat_id, user_id, chat_name="New Chat"):
     """
     Store a metadata record that represents the chat session with a name.
     """
     metadata = {
         "chat_id": chat_id,
+        "user_id": user_id,
         "chat_name": chat_name,
         "type": "session",
         "created_at": datetime.utcnow().isoformat(),
@@ -180,12 +292,22 @@ def update_chat_name(chat_id, new_name):
     """
     try:
         session_id = f"session_{chat_id}"
-        # Delete old session
+        
+        results = collection.get(ids=[session_id])
+        if not results.get("metadatas"):
+            print(f"Session {chat_id} not found")
+            return
+        
+        existing_meta = results["metadatas"][0]
+        user_id = existing_meta.get("user_id")
+        
+        
         collection.delete(ids=[session_id])
         
-        # Create new session with updated name
+        
         metadata = {
             "chat_id": chat_id,
+            "user_id": user_id,
             "chat_name": new_name,
             "type": "session",
             "updated_at": datetime.utcnow().isoformat()
@@ -199,12 +321,12 @@ def update_chat_name(chat_id, new_name):
     except Exception as e:
         print(f"Error updating chat name: {e}")
 
-def get_all_chat_sessions():
+def get_all_chat_sessions(user_id):
     """
-    Retrieve all chat sessions with their names, sorted by most recent first.
+    Retrieve all chat sessions for a specific user, sorted by most recent first.
     Returns list of tuples: (chat_id, chat_name, updated_at)
     """
-    results = collection.get(where={"type": "session"})
+    results = collection.get(where={"$and": [{"type": "session"}, {"user_id": user_id}]})
 
     sessions = []
     metadatas = results.get("metadatas") or []
@@ -217,18 +339,18 @@ def get_all_chat_sessions():
         if chat_id:
             sessions.append((chat_id, chat_name, updated_at))
     
-    # Sort by updated_at timestamp, most recent first
+    
     sessions.sort(key=lambda x: x[2], reverse=True)
     
     return sessions
 
-def delete_chat_session(chat_id):
+def delete_chat_session(chat_id, user_id):
     """
-    Delete a chat session and all its messages.
+    Delete a chat session and all its messages for a specific user.
     """
     try:
-        # Delete all messages in the chat
-        results = collection.get(where={"chat_id": chat_id})
+        
+        results = collection.get(where={"$and": [{"chat_id": chat_id}, {"user_id": user_id}]})
         ids_to_delete = results.get("ids", [])
         
         if ids_to_delete:
@@ -245,7 +367,7 @@ def get_chat_name(chat_id):
     """
     try:
         results = collection.get(
-            where={"chat_id": chat_id, "type": "session"}
+            where={"$and": [{"chat_id": chat_id}, {"type": "session"}]}
         )
         metadatas = results.get("metadatas", [])
         if metadatas:
@@ -254,5 +376,5 @@ def get_chat_name(chat_id):
         print(f"Error getting chat name: {e}")
     return "Untitled Chat"
 
-# Initialize collection on import
+
 initialize_collection()
