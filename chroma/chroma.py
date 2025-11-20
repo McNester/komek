@@ -208,6 +208,90 @@ def username_exists(username: str) -> bool:
 
 
 
+
+
+def create_session(user_id: str, session_token: str, expiry: str) -> bool:
+    try:
+        session_id = f"session_token_{session_token}"
+        metadata = {
+            "user_id": user_id,
+            "session_token": session_token,
+            "expiry": expiry,
+            "created_at": datetime.utcnow().isoformat(),
+            "type": "user_session"
+        }
+        collection.add(
+            documents=[f"User session: {user_id}"],
+            metadatas=[metadata],
+            ids=[session_id]
+        )
+        print(f"Created session for user: {user_id}")
+        return True
+    except Exception as e:
+        print(f"Error creating session: {e}")
+        return False
+
+def get_session(session_token: str) -> dict | None:
+    try:
+        results = collection.get(
+            where={"$and": [{"session_token": session_token}, {"type": "user_session"}]}
+        )
+        metadatas = results.get("metadatas", [])
+        if metadatas:
+            session = metadatas[0]
+            from common.auth import is_session_valid
+            if not is_session_valid(session.get("expiry")):
+                delete_session(session_token)
+                return None
+            return session
+        return None
+    except Exception as e:
+        print(f"Error getting session: {e}")
+        return None
+
+def delete_session(session_token: str) -> bool:
+    try:
+        session_id = f"session_token_{session_token}"
+        collection.delete(ids=[session_id])
+        print(f"Deleted session: {session_token[:10]}...")
+        return True
+    except Exception as e:
+        print(f"Error deleting session: {e}")
+        return False
+
+def delete_user_sessions(user_id: str) -> bool:
+    try:
+        results = collection.get(
+            where={"$and": [{"user_id": user_id}, {"type": "user_session"}]}
+        )
+        ids_to_delete = results.get("ids", [])
+        if ids_to_delete:
+            collection.delete(ids=ids_to_delete)
+            print(f"Deleted {len(ids_to_delete)} sessions for user: {user_id}")
+        return True
+    except Exception as e:
+        print(f"Error deleting user sessions: {e}")
+        return False
+
+def cleanup_expired_sessions() -> int:
+    try:
+        results = collection.get(where={"type": "user_session"})
+        metadatas = results.get("metadatas", [])
+        ids = results.get("ids", [])
+        from common.auth import is_session_valid
+        expired_ids = []
+        for metadata, session_id in zip(metadatas, ids):
+            if not is_session_valid(metadata.get("expiry", "")):
+                expired_ids.append(session_id)
+        if expired_ids:
+            collection.delete(ids=expired_ids)
+            print(f"Cleaned up {len(expired_ids)} expired sessions")
+        return len(expired_ids)
+    except Exception as e:
+        print(f"Error cleaning up expired sessions: {e}")
+        return 0
+
+
 def query_chromadb(query_text, n_results=3):
     """
     Query the ChromaDB collection for relevant documents.

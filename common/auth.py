@@ -4,7 +4,8 @@ Handles user registration, login, and session management.
 """
 import bcrypt
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
+import secrets
 
 def hash_password(password: str) -> str:
     """
@@ -90,3 +91,20 @@ def validate_password(password: str) -> tuple[bool, str]:
         return False, "Password is too long"
     
     return True, ""
+
+
+
+def generate_session_token() -> str:
+    return secrets.token_urlsafe(32)
+
+def get_session_expiry(days: int = 7) -> str:
+    expiry = datetime.utcnow() + timedelta(days=days)
+    return expiry.isoformat()
+
+def is_session_valid(expiry_str: str) -> bool:
+    try:
+        expiry = datetime.fromisoformat(expiry_str)
+        return datetime.utcnow() < expiry
+    except Exception:
+        return False
+

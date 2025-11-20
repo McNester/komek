@@ -12,14 +12,22 @@ from chroma.chroma import (
     delete_chat_session,
     create_user,
     get_user_by_username,
-    username_exists
+    username_exists,
+    get_user_by_id,
+    username_exists,
+    create_session,
+    get_session,
+    delete_session,
+    delete_user_sessions
 )
 from ollama_client.llm import query_ollama
 from common.auth import (
     hash_password,
     verify_password,
     validate_username,
-    validate_password
+    validate_password,
+    generate_session_token,
+    get_session_expiry,
 )
 
 USER = "user"
@@ -30,6 +38,8 @@ CURRENT_CHAT_NAME = "chat_name"
 CURRENT_USER = "current_user"
 USER_ID = "user_id"
 IS_AUTHENTICATED = "is_authenticated"
+SESSION_TOKEN = "session_token"
+SESSION_CHECKED = "session_checked"
 
 
 st.set_page_config(page_title="Mental Health Support", layout="wide")
@@ -65,13 +75,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def init_session_state():
-
+    """Initialize all required session state variables."""
+    if SESSION_CHECKED not in st.session_state:
+        st.session_state[SESSION_CHECKED] = False
+    
     if IS_AUTHENTICATED not in st.session_state:
         st.session_state[IS_AUTHENTICATED] = False
     if CURRENT_USER not in st.session_state:
         st.session_state[CURRENT_USER] = None
     if USER_ID not in st.session_state:
         st.session_state[USER_ID] = None
+    if SESSION_TOKEN not in st.session_state:
+        st.session_state[SESSION_TOKEN] = None
     if CURRENT_CHAT_KEY not in st.session_state:
         st.session_state[CURRENT_CHAT_KEY] = None
     if CURRENT_CHAT_NAME not in st.session_state:
@@ -83,9 +98,51 @@ def init_session_state():
     if "auth_page" not in st.session_state:
         st.session_state.auth_page = "login"
 
+    if not st.session_state[SESSION_CHECKED] and not st.session_state[IS_AUTHENTICATED]:
+        check_existing_session()
+        st.session_state[SESSION_CHECKED] = True
+
+
+def check_existing_session():
+    """
+    Check if there's a valid session token and restore the user session.
+    This runs once per page load.
+    """
+    
+    try:
+        query_params = st.query_params
+        token = query_params.get("st", None)  
+        
+        if token:
+            
+            session_data = get_session(token)
+            
+            if session_data:
+                
+                user_id = session_data.get("user_id")
+                user = get_user_by_id(user_id)
+                
+                if user:
+                    st.session_state[IS_AUTHENTICATED] = True
+                    st.session_state[CURRENT_USER] = user.username
+                    st.session_state[USER_ID] = user.user_id
+                    st.session_state[SESSION_TOKEN] = token
+                    print(f"Session restored for user: {user.username}")
+                    return True
+            else:
+                
+                st.query_params.clear()
+        
+        return False
+    except Exception as e:
+        print(f"Error checking existing session: {e}")
+        return False
+
+
+
 def login_user(username, password):
     """
-    Authenticate a user.
+    Authenticate a user and create a session.
     
     Returns:
         tuple: (success: bool, message: str)
@@ -99,15 +156,27 @@ def login_user(username, password):
         return False, "Incorrect password"
     
     
-    st.session_state[IS_AUTHENTICATED] = True
-    st.session_state[CURRENT_USER] = username
-    st.session_state[USER_ID] = user.user_id
+    session_token = generate_session_token()
+    expiry = get_session_expiry(days=7)  
     
-    return True, "Login successful"
+    
+    if create_session(user.user_id, session_token, expiry):
+        
+        st.session_state[IS_AUTHENTICATED] = True
+        st.session_state[CURRENT_USER] = username
+        st.session_state[USER_ID] = user.user_id
+        st.session_state[SESSION_TOKEN] = session_token
+        
+        
+        st.query_params["st"] = session_token
+        
+        return True, "Login successful"
+    else:
+        return False, "Error creating session"
 
 def register_user(username, password, email=None):
     """
-    Register a new user.
+    Register a new user and create a session.
     
     Returns:
         tuple: (success: bool, message: str)
@@ -131,20 +200,43 @@ def register_user(username, password, email=None):
     user = create_user(username, password_hash, email)
     
     
-    st.session_state[IS_AUTHENTICATED] = True
-    st.session_state[CURRENT_USER] = username
-    st.session_state[USER_ID] = user.user_id
+    session_token = generate_session_token()
+    expiry = get_session_expiry(days=7)
     
-    return True, "Registration successful"
+    
+    if create_session(user.user_id, session_token, expiry):
+        
+        st.session_state[IS_AUTHENTICATED] = True
+        st.session_state[CURRENT_USER] = username
+        st.session_state[USER_ID] = user.user_id
+        st.session_state[SESSION_TOKEN] = session_token
+        
+        
+        st.query_params["st"] = session_token
+        
+        return True, "Registration successful"
+    else:
+        return False, "Error creating session"
 
 def logout_user():
-    """Log out the current user."""
+    """Log out the current user and clear session."""
+    
+    if st.session_state.get(SESSION_TOKEN):
+        delete_session(st.session_state[SESSION_TOKEN])
+    
+    
     st.session_state[IS_AUTHENTICATED] = False
     st.session_state[CURRENT_USER] = None
     st.session_state[USER_ID] = None
+    st.session_state[SESSION_TOKEN] = None
     st.session_state[CURRENT_CHAT_KEY] = None
     st.session_state[CURRENT_CHAT_NAME] = None
     st.session_state[MESSAGES] = []
+    st.session_state[SESSION_CHECKED] = False
+    
+    
+    st.query_params.clear()
+    
     st.rerun()
 
 def show_login_page():
